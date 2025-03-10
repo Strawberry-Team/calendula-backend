@@ -1,283 +1,97 @@
-import { test, expect, request } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import dotenv from 'dotenv';
-// import { registerUser, loginUser, confirmUserEmail } from "./auth.helpers.js";
-import UserModel from "./../../src/user/model.js";
-import CalendarModel from "./../../src/calendar/model.js";
+import { BASE_URL, createAndLoginUser, expectResponseHeaders, generateHeaders, generateUserData } from "./helpers/auth.helpers.js";
 
 dotenv.config({ path: '.env.test', debug: true });
 
-const baseUrl = 'http://localhost:8080/api';
-const userModel = new UserModel();
-const calendarModel = new CalendarModel();
+const DEFAULT_CALENDAR_FIELDS = {
+    id: undefined,
+    title: 'Calendula Dev Team',
+    description: 'Stand-ups, retrospectives, planning sprints and product demos',
+    creationByUserId: undefined,
+    creationAt: undefined,
+};
+
+function generateCalendarData(base = {}, overrides = {}) {
+    return {
+        ...DEFAULT_CALENDAR_FIELDS,
+        ...base,
+        ...overrides
+    };
+}
+
+function expectCalendarDataToMatch(expected, actual) {
+    expect(actual).toMatchObject({
+        id: expected.id ?? expect.any(Number),
+        title: expected.title,
+        description: expected.description,
+        creationByUserId: expected.creationByUserId,
+        creationAt: expect.any(String)
+    });
+}
+
+async function expectCalendarResponse(response, expectedData, statusCode = 200) {
+    expectResponseHeaders(response, statusCode);
+    const responseBody = await response.json();
+    expectCalendarDataToMatch(expectedData, responseBody.data);
+    return responseBody;
+}
 
 test.describe('Calendars', () => {
     test.describe.configure({mode: 'serial', timeout: 2000});
 
-    // let accessToken;
-    //
-    // test.beforeAll(async ({ request }) => {
-    //     await registerUser(request);
-    //     await confirmUserEmail(request);
-    //     const loginResponse = await loginUser(request);
-    //     accessToken = loginResponse.accessToken;
-    // });
+    let userData = {};
+    let calendarData = {};
+    let headers = {};
 
-    const testUserData = {
-        email: `ann.nichols${Date.now()}@example.com`,
-        fullName: 'Ann Nichols',
-        country: 'Ukraine',
-        password: 'StrongPassword123!$',
-    };
-    let currentUser;
-
-    test('User registration', async ({request}) => {
-        const response = await request.post(`${baseUrl}/auth/register`, {
-            headers: {'Content-Type': 'application/json'},
-            data: {
-                email: testUserData.email,
-                fullName: testUserData.fullName,
-                country: testUserData.country,
-                password: testUserData.password,
-                password_confirm: testUserData.password
-            }
-        });
-
-        expect(response.status()).toBe(201);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.fullName');
-        expect(responseBody).toHaveProperty('data.email');
-        expect(responseBody).toHaveProperty('data.country');
-        expect(responseBody.data.id).toBeTruthy();
-        expect(responseBody.data.fullName).toBe(testUserData.fullName);
-        expect(responseBody.data.email).toBe(testUserData.email);
-        expect(responseBody.data.country).toBe(testUserData.country);
-
-        currentUser = await userModel.getEntityById(responseBody.data.id);
-        expect(currentUser).toBeDefined();
-        expect(currentUser.id).toBeTruthy();
-        expect(currentUser.fullName).toBe(testUserData.fullName);
-        expect(currentUser.email).toBe(testUserData.email);
-        expect(currentUser.country).toBe(testUserData.country);
-        expect(currentUser.confirmToken).toBeTruthy();
+    test.beforeAll('Create and login user', async ({ request}) => {
+        const user = await createAndLoginUser(request);
+        userData = generateUserData(user);
+        calendarData = generateCalendarData({}, { creationByUserId: userData.id });
+        headers = generateHeaders(userData.accessToken);
     });
-
-    let confirmedUser;
-
-    test('Confirm the user\'s email by token', async ({request}) => {
-        const confirmToken = currentUser.confirmToken;
-        const response = await request.get(`${baseUrl}/auth/confirm-email/${confirmToken}`, {
-            params: {
-                confirm_token: confirmToken
-            }
-        });
-
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('message');
-        expect(responseBody.message).toBe('Successful email confirmation');
-
-        confirmedUser = await userModel.getEntityById(currentUser.id);
-        expect(confirmedUser).toBeDefined();
-        expect(confirmedUser.isVerified).toBe(1);
-    });
-
-    let accessToken;
-
-    test('User login', async ({request}) => {
-        const response = await request.post(`${baseUrl}/auth/login`, {
-            headers: {'Content-Type': 'application/json'},
-            data: {
-                email: confirmedUser.email,
-                password: testUserData.password
-            }
-        });
-
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('message');
-        expect(responseBody).toHaveProperty('accessToken');
-        expect(responseBody.message).toBe('Successful login');
-        expect(responseBody.accessToken).toBeTruthy();
-
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.fullName');
-        expect(responseBody).toHaveProperty('data.email');
-        expect(responseBody).toHaveProperty('data.country');
-        expect(responseBody).toHaveProperty('data.profilePicture');
-        expect(responseBody).toHaveProperty('data.isVerified');
-        expect(responseBody).toHaveProperty('data.role');
-        expect(responseBody).toHaveProperty('data.creationAt');
-        expect(responseBody.data.id).toBe(confirmedUser.id);
-        expect(responseBody.data.fullName).toBe(confirmedUser.fullName);
-        expect(responseBody.data.email).toBe(confirmedUser.email);
-        expect(responseBody.data.country).toBe(confirmedUser.country);
-        expect(responseBody.data.profilePicture).toBe(confirmedUser.profilePicture);
-        expect(responseBody.data.role).toBe(confirmedUser.role);
-        expect(responseBody.data.creationAt).toBeTruthy();
-
-        accessToken = responseBody.accessToken;
-    });
-
-    const testCalendarData = {
-        title: 'Test Calendar',
-        description: 'Test Calendar Description'
-    };
-    let currentCalendar = {};
 
     test("Create Calendar", async ({request}) => {
-        const response = await request.post(`${baseUrl}/calendars/`, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            },
+        const response = await request.post(`${BASE_URL}/calendars/`, {
+            headers: headers,
             data: {
-                title: testCalendarData.title,
-                description: testCalendarData.description
+                title: calendarData.title,
+                description: calendarData.description
             }
         });
 
-        expect(response.status()).toBe(201);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.title');
-        expect(responseBody).toHaveProperty('data.description');
-        expect(responseBody).toHaveProperty('data.creationByUserId');
-        expect(responseBody).toHaveProperty('data.creationAt');
-        expect(responseBody.data.id).toBeTruthy();
-        expect(responseBody.data.title).toBe(testCalendarData.title);
-        expect(responseBody.data.description).toBe(testCalendarData.description);
-        expect(responseBody.data.creationByUserId).toBe(confirmedUser.id);
-        expect(responseBody.data.creationAt).toBeTruthy();
-
-        currentCalendar.id = responseBody.data.id;
+        const responseBody = await expectCalendarResponse(response, calendarData, 201);
+        calendarData.id = responseBody.data.id;
     });
 
     test("Get Calendar", async ({request}) => {
-        const response = await request.get(`${baseUrl}/calendars/${currentCalendar.id}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            },
+        const response = await request.get(`${BASE_URL}/calendars/${calendarData.id}`, {
+            headers: headers
         });
 
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.title');
-        expect(responseBody).toHaveProperty('data.description');
-        expect(responseBody).toHaveProperty('data.creationByUserId');
-        expect(responseBody).toHaveProperty('data.creationAt');
-        expect(responseBody.data.id).toBe(currentCalendar.id);
-        expect(responseBody.data.title).toBe(testCalendarData.title);
-        expect(responseBody.data.description).toBe(testCalendarData.description);
-        expect(responseBody.data.creationByUserId).toBe(confirmedUser.id);
-        expect(responseBody.data.creationAt).toBeTruthy();
+        await expectCalendarResponse(response, calendarData);
     });
 
     test("Update Calendar", async ({request}) => {
-        testCalendarData.title = testCalendarData.title + " Updated";
-        testCalendarData.description = testCalendarData.description + " Updated";
+        calendarData.title = "Sports activities";
+        calendarData.description = "Schedule of gym classes and bike rides";
 
-        const response = await request.patch(`${baseUrl}/calendars/${currentCalendar.id}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            },
+        const response = await request.patch(`${BASE_URL}/calendars/${calendarData.id}`, {
+            headers: headers,
             data: {
-                title: testCalendarData.title,
-                description: testCalendarData.description
+                title: calendarData.title,
+                description: calendarData.description
             }
         });
 
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.title');
-        expect(responseBody).toHaveProperty('data.description');
-        expect(responseBody).toHaveProperty('data.creationByUserId');
-        expect(responseBody).toHaveProperty('data.creationAt');
-        expect(responseBody.data.id).toBe(currentCalendar.id);
-        expect(responseBody.data.title).toBe(testCalendarData.title);
-        expect(responseBody.data.description).toBe(testCalendarData.description);
-        expect(responseBody.data.creationByUserId).toBe(confirmedUser.id);
-        expect(responseBody.data.creationAt).toBeTruthy();
+        await expectCalendarResponse(response, calendarData);
     });
 
     test("Delete Calendar", async ({request}) => {
-        const response = await request.delete(`${baseUrl}/calendars/${currentCalendar.id}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            }
+        const response = await request.delete(`${BASE_URL}/calendars/${calendarData.id}`, {
+            headers: headers
         });
 
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('data');
-        expect(responseBody).toHaveProperty('data.id');
-        expect(responseBody).toHaveProperty('data.title');
-        expect(responseBody).toHaveProperty('data.description');
-        expect(responseBody).toHaveProperty('data.creationByUserId');
-        expect(responseBody).toHaveProperty('data.creationAt');
-        expect(responseBody.data.id).toBe(currentCalendar.id);
-        expect(responseBody.data.title).toBe(testCalendarData.title);
-        expect(responseBody.data.description).toBe(testCalendarData.description);
-        expect(responseBody.data.creationByUserId).toBe(confirmedUser.id);
-        expect(responseBody.data.creationAt).toBeTruthy();
-    });
-
-    test('Final user logout', async ({ request }) => {
-        const response = await request.post(`${baseUrl}/auth/logout`);
-
-        expect(response.status()).toBe(200);
-
-        const headers = response.headers();
-        expect(headers).toHaveProperty('content-type');
-        expect(headers['content-type']).toContain('application/json');
-
-        const responseBody = await response.json();
-        expect(responseBody).toHaveProperty('message');
-        expect(responseBody.message).toBe('Successful logout');
+        await expectCalendarResponse(response, calendarData);
     });
 });
